@@ -91,6 +91,69 @@ const Sec = (() => {
     return out;
   }
 
+  /* ---------------- Verificação em duas etapas (TOTP, RFC 6238) ----------------
+   * Compatível com Google Authenticator, Microsoft Authenticator, Authy, 1Password etc.
+   * Segredo de 160 bits, HMAC-SHA1, 6 dígitos, janelas de 30 segundos. */
+  const B32 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+  function base32Encode(bytes) {
+    let bits = 0, value = 0, out = '';
+    for (const b of bytes) {
+      value = (value << 8) | b; bits += 8;
+      while (bits >= 5) { out += B32[(value >>> (bits - 5)) & 31]; bits -= 5; }
+    }
+    if (bits > 0) out += B32[(value << (5 - bits)) & 31];
+    return out;
+  }
+  function base32Decode(str) {
+    const clean = String(str).toUpperCase().replace(/[^A-Z2-7]/g, '');
+    let bits = 0, value = 0;
+    const out = [];
+    for (const c of clean) {
+      value = (value << 5) | B32.indexOf(c); bits += 5;
+      if (bits >= 8) { out.push((value >>> (bits - 8)) & 255); bits -= 8; }
+    }
+    return new Uint8Array(out);
+  }
+  const newTotpSecret = () => base32Encode(crypto.getRandomValues(new Uint8Array(20)));
+  const TOTP_STEP = 30;
+  const currentStep = (t = Date.now()) => Math.floor(t / 1000 / TOTP_STEP);
+  async function totpAt(secret, step) {
+    const key = await crypto.subtle.importKey('raw', base32Decode(secret), { name: 'HMAC', hash: 'SHA-1' }, false, ['sign']);
+    const counter = new Uint8Array(8);
+    let n = step;
+    for (let i = 7; i >= 0; i--) { counter[i] = n & 255; n = Math.floor(n / 256); }
+    const mac = new Uint8Array(await crypto.subtle.sign('HMAC', key, counter));
+    const off = mac[mac.length - 1] & 15;
+    const bin = ((mac[off] & 127) << 24) | (mac[off + 1] << 16) | (mac[off + 2] << 8) | mac[off + 3];
+    return String(bin % 1000000).padStart(6, '0');
+  }
+  /* Aceita a janela atual e uma antes/depois (relógio do celular um pouco adiantado ou atrasado).
+     Retorna o número da janela usada, para impedir que o mesmo código seja usado duas vezes. */
+  async function verifyTotp(secret, code, lastUsedStep = -1) {
+    const c = String(code).replace(/\s/g, '');
+    if (!/^\d{6}$/.test(c)) return null;
+    const now = currentStep();
+    for (const step of [now, now - 1, now + 1]) {
+      if (step <= lastUsedStep) continue;
+      if (await totpAt(secret, step) === c) return step;
+    }
+    return null;
+  }
+  const otpauthUri = (secret, email) => `otpauth://totp/Eleva:${encodeURIComponent(email)}?secret=${secret}&issuer=Eleva&algorithm=SHA1&digits=6&period=30`;
+
+  /* Códigos de backup: 10 códigos de uso único, guardados só como hash */
+  function newBackupCodes(n = 10) {
+    const alphabet = 'abcdefghjkmnpqrstuvwxyz23456789';
+    const codes = [];
+    while (codes.length < n) {
+      const bytes = crypto.getRandomValues(new Uint8Array(8));
+      const raw = Array.from(bytes, (b) => alphabet[b % alphabet.length]).join('');
+      codes.push(`${raw.slice(0, 4)}-${raw.slice(4)}`);
+    }
+    return codes;
+  }
+  const normBackup = (c) => String(c).toLowerCase().replace(/[^a-z0-9]/g, '');
+
   /* ---------------- Chaves da Zona Segura ---------------- */
   const ECDH = { name: 'ECDH', namedCurve: 'P-256' };
 
@@ -226,7 +289,7 @@ const Sec = (() => {
     return null;
   }
 
-  return { hashPassword, verifyPassword, passwordStrength, sha256Hex, randomCode, generateKeyPair, importPub,
+  return { newTotpSecret, totpAt, currentStep, verifyTotp, otpauthUri, newBackupCodes, normBackup, TOTP_STEP, hashPassword, verifyPassword, passwordStrength, sha256Hex, randomCode, generateKeyPair, importPub,
     importPriv, wrapPrivate, unwrapPrivate, conversationKey, encrypt, decrypt, safetyCode, detectPII,
     stripImageMetadata, rateLimit };
 })();

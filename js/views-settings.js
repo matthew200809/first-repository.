@@ -8,7 +8,7 @@
     <div class="toggle-row"><div><div>${label}</div>${hint ? `<div class="tiny muted">${hint}</div>` : ''}</div>
     <label class="switch"><input type="checkbox" id="${id}" ${checked ? 'checked' : ''}><span></span><span class="sr-only">${label}</span></label></div>`;
 
-  Views.settings = () => {
+  Views.settings = ({ query }) => {
     const me = App.me();
     const s = me.settings;
     const blocked = me.blocked.map(Store.user).filter(Boolean);
@@ -17,7 +17,7 @@
       <div class="settings-grid">
         <nav class="settings-nav">
           <a href="#/config#perfil">Editar perfil</a><a href="#/config#seguranca">Conta e segurança</a><a href="#/config#privacidade">Privacidade</a>
-          <a href="#/config#zona">Zona Segura</a><a href="#/config#notificacoes">Notificações</a><a href="#/config#bloqueadas">Bloqueadas</a><a href="#/config#dados">Seus dados (LGPD)</a>
+          <a href="#/config#zona">Zona Segura</a><a href="#/config#notificacoes">Notificações</a><a href="#/config#acessibilidade">Acessibilidade</a><a href="#/config#bloqueadas">Bloqueadas</a><a href="#/config#dados">Seus dados (LGPD)</a>
         </nav>
         <div>
           <section class="settings-section" id="perfil">
@@ -39,7 +39,8 @@
             <h2>Conta e segurança</h2>
             <p class="small muted">E-mail: <b>${esc(me.email)}</b> ${me.emailVerified ? '<span class="tag lock">verificado</span>' : ''}</p>
             <button class="btn btn-outline btn-sm" id="change-pw">Alterar senha</button>
-            ${toggle('twofa', me.twoFA, 'Verificação em duas etapas', 'Ao entrar, pedimos também um código enviado ao seu e-mail.')}
+            ${protectionHtml(me)}
+            ${mfaHtml(me)}
             <div class="toggle-row"><div><div>Saída automática</div><div class="tiny muted">Por segurança, você é desconectada após 15 minutos sem uso.</div></div><span class="tag">Sempre ativa</span></div>
             <h3 class="section-title">Sessões ativas</h3>
             ${me.sessions.map((x) => `<div class="list-row"><div class="grow"><b>${esc(x.device)}</b> ${x.id === App.state.sid ? '<span class="tag lock">esta sessão</span>' : ''}<div class="tiny muted">Iniciada ${U.fullDate(x.createdAt)}</div></div></div>`).join('')}
@@ -76,6 +77,12 @@
             <div class="toggle-row"><div><div>Alertas de segurança</div><div class="tiny muted">Novo acesso, troca de senha e exclusão de conta.</div></div><span class="tag">Sempre ativos</span></div>
           </section>
 
+          <section class="settings-section" id="acessibilidade">
+            <h2>Acessibilidade e aparência</h2>
+            <p class="small muted">Modo escuro, tamanho do texto, alto contraste, fonte de leitura fácil, espaçamento, links sublinhados e menos animações.</p>
+            <div class="row"><button class="btn btn-outline btn-sm" data-tool="a11y">Abrir preferências de acessibilidade</button><button class="btn btn-ghost btn-sm" data-tool="help">Ver atalhos de teclado</button><button class="btn btn-ghost btn-sm" id="tour">Refazer o tour</button></div>
+          </section>
+
           <section class="settings-section" id="bloqueadas">
             <h2>Usuárias bloqueadas</h2>
             ${blocked.map((u) => `<div class="list-row">${App.avatar(u, 'sm')}<div class="grow"><b>${esc(u.name)}</b></div><button class="btn btn-ghost btn-sm" data-unblock="${esc(u.id)}">Desbloquear</button></div>`).join('') || '<p class="muted small">Você não bloqueou ninguém.</p>'}
@@ -89,6 +96,7 @@
         </div>
       </div>`);
 
+    $$('[data-pct]').forEach((i) => { i.style.width = `${i.dataset.pct}%`; });
     const save = () => Store.save();
     const bindToggle = (id, fn) => $(`#${id}`).addEventListener('change', (e) => { fn(e.target.checked); save(); U.toast('Preferência salva'); });
 
@@ -115,15 +123,16 @@
 
     /* Segurança */
     $('#change-pw').addEventListener('click', changePassword);
-    $('#twofa').addEventListener('change', async (e) => {
-      const want = e.target.checked;
-      e.target.checked = !want;
-      if (!(await App.requireReauth(want ? 'Para ativar a verificação em duas etapas.' : 'Para desativar a verificação em duas etapas.'))) return;
-      me.twoFA = want; save();
-      Store.sendMail(me.email, want ? 'Verificação em duas etapas ativada' : 'Verificação em duas etapas desativada', want ? 'A partir de agora pediremos um código a cada acesso.' : 'Se não foi você, altere sua senha imediatamente.');
-      U.toast(want ? 'Verificação em duas etapas ativada' : 'Verificação em duas etapas desativada', 'ok');
-      App.render();
+    const mfaRoot = $('#mfa');
+    mfaRoot.addEventListener('click', async (e) => {
+      const a = e.target.closest('[data-mfa]');
+      if (!a) return;
+      if (a.dataset.mfa === 'setup') setupMfa();
+      else if (a.dataset.mfa === 'backup') regenerateBackup();
+      else if (a.dataset.mfa === 'off') disableMfa();
     });
+    $('#tour').addEventListener('click', () => A11y.openTour());
+    if (query.get('ativar') === '2fa' && !me.mfa) { history.replaceState(null, '', '#/config'); $('#seguranca').scrollIntoView(); setTimeout(setupMfa, 300); }
     $('#end-others').addEventListener('click', async () => {
       if (!(await App.requireReauth('Para encerrar as outras sessões.'))) return;
       me.sessions = me.sessions.filter((x) => x.id === App.state.sid);
@@ -163,6 +172,189 @@
     $('#my-data').addEventListener('click', showMyData);
     $('#delete-account').addEventListener('click', deleteAccount);
   };
+
+  /* ---------- Nível de proteção da conta ---------- */
+  function protectionHtml(me) {
+    const items = [
+      [me.emailVerified, 'E-mail confirmado'],
+      [true, 'Senha forte (exigida pelo Eleva)'],
+      [!!me.mfa, 'Verificação em duas etapas ativada'],
+      [!!me.mfa && (me.mfa.backup || []).length >= 3, 'Códigos de backup guardados'],
+      [!!me.zonePin, 'PIN na Zona Segura'],
+      [me.sessions.length <= 1, 'Nenhuma outra sessão aberta'],
+    ];
+    const done = items.filter((i) => i[0]).length;
+    const pct = Math.round((done / items.length) * 100);
+    const level = pct >= 80 ? 'Alto' : pct >= 50 ? 'Médio' : 'Baixo';
+    return `
+      <div class="protect" role="group" aria-label="Nível de proteção da conta">
+        <div class="row between"><b>Nível de proteção: ${level}</b><span class="small muted">${done} de ${items.length}</span></div>
+        <div class="protect-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${pct}" aria-label="Proteção da conta"><i data-pct="${pct}"></i></div>
+        <ul>${items.map(([ok, l]) => `<li><span class="st ${ok ? 'ok' : 'no'}" aria-hidden="true">${ok ? '✓' : '!'}</span><span>${esc(l)}<span class="sr-only">: ${ok ? 'feito' : 'pendente'}</span></span></li>`).join('')}</ul>
+      </div>`;
+  }
+
+  /* ---------- Verificação em duas etapas ---------- */
+  function mfaHtml(me) {
+    const m = me.mfa;
+    if (!m) {
+      return `<div id="mfa" class="card white">
+        <div class="row between"><h3 class="serif">Verificação em duas etapas</h3><span class="tag warn">Desativada</span></div>
+        <p class="small">Além da senha, o Eleva pede um código que só você tem. <b>Mesmo que sua senha vaze, ninguém entra na sua conta.</b> É a proteção mais importante que você pode ativar.</p>
+        <button class="btn btn-primary btn-sm" data-mfa="setup">Ativar verificação em duas etapas</button>
+      </div>`;
+    }
+    const left = (m.backup || []).length;
+    return `<div id="mfa" class="card white">
+      <div class="row between"><h3 class="serif">Verificação em duas etapas</h3><span class="tag lock">Ativada</span></div>
+      <p class="small">Método: <b>${m.method === 'totp' ? 'app autenticador' : 'código por e-mail'}</b> · ativada em ${U.fullDate(m.enabledAt)}</p>
+      <p class="small">Códigos de backup: <b>${left}</b> restante${left === 1 ? '' : 's'} ${left <= 2 ? '<span class="tag warn">gere novos</span>' : ''}</p>
+      <div class="row">
+        <button class="btn btn-outline btn-sm" data-mfa="setup">Trocar método</button>
+        <button class="btn btn-outline btn-sm" data-mfa="backup">Gerar novos códigos de backup</button>
+        <button class="btn btn-danger btn-sm" data-mfa="off">Desativar</button>
+      </div>
+    </div>`;
+  }
+
+  async function makeBackup(me) {
+    const codes = Sec.newBackupCodes();
+    me.mfa.backup = await Promise.all(codes.map((c) => Sec.sha256Hex(`backup:${me.id}:${Sec.normBackup(c)}`)));
+    return codes;
+  }
+  function backupStep(codes, onDone) {
+    return `
+      <h2>Guarde seus códigos de backup</h2>
+      <p class="small">Se você perder o celular, use um destes códigos para entrar. <b>Cada um funciona uma vez.</b> Guarde num lugar seguro (gerenciador de senhas ou papel). Eles não serão mostrados de novo.</p>
+      <div class="backup-grid" aria-label="Códigos de backup">${codes.map((c) => `<span>${esc(c)}</span>`).join('')}</div>
+      <label class="check"><input type="checkbox" id="saved-codes"> <span>Guardei meus códigos de backup em um lugar seguro</span></label>
+      <div class="modal-actions"><button class="btn btn-outline" data-copy-codes>Copiar códigos</button><button class="btn btn-primary" data-finish disabled>Concluir</button></div>`;
+  }
+  function bindBackupStep(m, codes, onDone) {
+    $('[data-copy-codes]', m.el).addEventListener('click', () => U.copy(codes.join('\n')));
+    const chk = $('#saved-codes', m.el), fin = $('[data-finish]', m.el);
+    chk.addEventListener('change', () => { fin.disabled = !chk.checked; });
+    fin.addEventListener('click', onDone);
+  }
+
+  async function setupMfa() {
+    if (!(await App.requireReauth('Para configurar a verificação em duas etapas.'))) return;
+    const me = App.me();
+    const state = { method: 'totp', secret: Sec.newTotpSecret() };
+    const m = U.modal('<div data-wiz></div>', { wide: true });
+    const wiz = () => $('[data-wiz]', m.el);
+    const steps = (n) => `<div class="steps" aria-hidden="true">${[1, 2, 3].map((i) => `<span class="${i <= n ? 'on' : ''}"></span>`).join('')}</div><p class="tiny muted">Passo ${n} de 3</p>`;
+    const setTitle = () => { const h = $('h2', m.el); if (h) h.id = m.el.getAttribute('aria-labelledby'); };
+
+    const step1 = () => {
+      wiz().innerHTML = `${steps(1)}
+        <h2>Por que ativar a verificação em duas etapas?</h2>
+        <ul class="why">
+          <li><span>Senhas vazam: são reaproveitadas em outros sites ou descobertas em golpes de phishing.</span></li>
+          <li><span>Com a segunda etapa, quem tiver só a sua senha não entra. É preciso também o código do seu celular.</span></li>
+          <li><span>Suas mentorias e conversas na Zona Segura ficam muito mais protegidas.</span></li>
+        </ul>
+        <fieldset class="stack"><legend class="section-title">Escolha como receber o código</legend>
+          <label class="method"><input type="radio" name="method" value="totp" checked><span><b>App autenticador</b> <span class="tag lock">Recomendado</span><br><span class="small muted">Google Authenticator, Microsoft Authenticator, Authy ou 1Password. Funciona sem internet e é o mais seguro.</span></span></label>
+          <label class="method"><input type="radio" name="method" value="email"><span><b>Código por e-mail</b><br><span class="small muted">Mais simples, mas depende da segurança do seu e-mail.</span></span></label>
+        </fieldset>
+        <div class="modal-actions"><button class="btn btn-ghost" data-close>Cancelar</button><button class="btn btn-primary" data-next>Continuar</button></div>`;
+      setTitle();
+      $('[data-close]', m.el).addEventListener('click', m.close);
+      $('[data-next]', m.el).addEventListener('click', () => {
+        state.method = $('input[name=method]:checked', m.el).value;
+        step2();
+      });
+    };
+
+    const step2 = async () => {
+      if (state.method === 'totp') {
+        const grouped = state.secret.match(/.{1,4}/g).join(' ');
+        wiz().innerHTML = `${steps(2)}
+          <h2>Conecte seu app autenticador</h2>
+          <ol class="small">
+            <li>Abra o app autenticador no celular e toque em <b>Adicionar conta</b> (ou “+”).</li>
+            <li>Escolha <b>Inserir chave de configuração</b>. Em nome, use <b>Eleva</b>.</li>
+            <li>Digite a chave abaixo e escolha <b>Baseada em tempo</b>.</li>
+          </ol>
+          <div class="secret" aria-label="Chave de configuração">${esc(grouped)}</div>
+          <div class="row"><button class="btn btn-ghost btn-sm" data-copy-secret>Copiar chave</button><button class="btn btn-ghost btn-sm" data-copy-uri>Copiar link otpauth://</button></div>
+          ${Views.totpSimHtml()}
+          <form data-confirm>
+            <label class="field"><span>Digite o código de 6 dígitos que aparece no app</span><input type="text" name="code" class="code-input" inputmode="numeric" autocomplete="one-time-code" maxlength="6" required></label>
+            <div class="alert alert-error hidden" data-err role="alert"></div>
+            <div class="modal-actions"><button type="button" class="btn btn-ghost" data-back>Voltar</button><button class="btn btn-primary">Verificar e ativar</button></div>
+          </form>`;
+        Views.bindTotpSim(m.el, state.secret);
+        $('[data-copy-secret]', m.el).addEventListener('click', () => U.copy(state.secret));
+        $('[data-copy-uri]', m.el).addEventListener('click', () => U.copy(Sec.otpauthUri(state.secret, me.email)));
+      } else {
+        await App.issueCode(me.email, '2fa-setup');
+        wiz().innerHTML = `${steps(2)}
+          <h2>Confirme seu e-mail</h2>
+          <p class="small">Enviamos um código para <b>${esc(me.email)}</b>. (Protótipo: veja o “E-mail simulado”, disponível também em Ajustes › Seus dados.)</p>
+          <form data-confirm>
+            <label class="field"><span>Código de 6 dígitos</span><input type="text" name="code" class="code-input" inputmode="numeric" autocomplete="one-time-code" maxlength="6" required></label>
+            <div class="alert alert-error hidden" data-err role="alert"></div>
+            <div class="modal-actions"><button type="button" class="btn btn-ghost" data-back>Voltar</button><button type="button" class="btn btn-outline" data-inbox>Abrir e-mail simulado</button><button class="btn btn-primary">Verificar e ativar</button></div>
+          </form>`;
+        $('[data-inbox]', m.el).addEventListener('click', () => $('#inbox-btn').click());
+      }
+      setTitle();
+      const f = $('[data-confirm]', m.el);
+      f.code.addEventListener('input', () => { f.code.value = f.code.value.replace(/\D/g, '').slice(0, 6); });
+      f.code.focus();
+      $('[data-back]', m.el).addEventListener('click', step1);
+      f.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const err = $('[data-err]', m.el);
+        let ok = false, lastStep = -1;
+        if (state.method === 'totp') {
+          const st = await Sec.verifyTotp(state.secret, f.code.value);
+          if (st !== null) { ok = true; lastStep = st; }
+        } else ok = (await App.checkCode(me.email, '2fa-setup', f.code.value)).ok;
+        if (!ok) { err.textContent = 'Código incorreto. Confira e tente de novo (o código do app muda a cada 30 segundos).'; err.classList.remove('hidden'); f.code.value = ''; f.code.focus(); return; }
+        me.mfa = { method: state.method, secret: state.method === 'totp' ? state.secret : null, lastStep, backup: [], enabledAt: Date.now() };
+        const codes = await makeBackup(me);
+        Store.save();
+        Store.sendMail(me.email, 'Verificação em duas etapas ativada', `A partir de agora pediremos um código ${state.method === 'totp' ? 'do seu app autenticador' : 'enviado por e-mail'} a cada acesso.`);
+        step3(codes);
+      });
+    };
+
+    const step3 = (codes) => {
+      wiz().innerHTML = `${steps(3)}${backupStep(codes)}`;
+      setTitle();
+      bindBackupStep(m, codes, () => {
+        m.close();
+        U.toast('Verificação em duas etapas ativada. Sua conta está mais segura!', 'ok');
+        App.nav('#/config#seguranca', true);
+      });
+      U.announce('Verificação em duas etapas ativada. Guarde seus códigos de backup.');
+    };
+    step1();
+  }
+
+  async function regenerateBackup() {
+    if (!(await App.requireReauth('Para gerar novos códigos de backup.'))) return;
+    const me = App.me();
+    const codes = await makeBackup(me);
+    Store.save();
+    const m = U.modal(`${backupStep(codes)}<p class="tiny muted">Os códigos antigos deixaram de funcionar.</p>`);
+    bindBackupStep(m, codes, () => { m.close(); App.render(); });
+  }
+
+  async function disableMfa() {
+    if (!(await App.requireReauth('Para desativar a verificação em duas etapas.'))) return;
+    const ok = await U.confirmDialog('Desativar a verificação em duas etapas?', 'Sua conta voltará a depender só da senha. Se a senha vazar, qualquer pessoa poderá entrar.', { okLabel: 'Desativar mesmo assim', danger: true });
+    if (!ok) return;
+    const me = App.me();
+    me.mfa = null;
+    Store.save();
+    Store.sendMail(me.email, 'Verificação em duas etapas desativada', 'Se não foi você, troque sua senha imediatamente e ative a verificação de novo.');
+    U.toast('Verificação em duas etapas desativada.');
+    App.render();
+  }
 
   function changePassword() {
     const me = App.me();
@@ -239,7 +431,7 @@
     const data = {
       exportadoEm: new Date().toISOString(),
       perfil: { nome: me.name, cargo: me.role, email: me.email, bio: me.bio, foto: me.photo ? '(imagem sem metadados)' : null, criadoEm: new Date(me.createdAt).toISOString(), termosAceitosEm: new Date(me.termsAcceptedAt).toISOString() },
-      seguranca: { senha: 'guardada apenas como hash PBKDF2 — nem nós conseguimos ver', verificacaoDuasEtapas: me.twoFA, pinZonaSegura: !!me.zonePin, sessoes: me.sessions.map((x) => ({ dispositivo: x.device, inicio: new Date(x.createdAt).toISOString() })) },
+      seguranca: { senha: 'guardada apenas como hash PBKDF2 — nem nós conseguimos ver', verificacaoDuasEtapas: me.mfa ? (me.mfa.method === 'totp' ? 'app autenticador' : 'código por e-mail') : 'desativada', codigosDeBackupRestantes: me.mfa ? (me.mfa.backup || []).length : 0, pinZonaSegura: !!me.zonePin, sessoes: me.sessions.map((x) => ({ dispositivo: x.device, inicio: new Date(x.createdAt).toISOString() })) },
       preferencias: me.settings,
       metricas: { visualizacoesDoPerfil: me.profileViews, seguidoras: me.followers.length, seguindo: me.following.length },
       seguindo: me.following.map((id) => Store.user(id)?.name).filter(Boolean),

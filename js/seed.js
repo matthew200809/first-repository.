@@ -17,7 +17,7 @@ const Seed = (() => {
     return Object.assign({
       id: U.uid('u'), email: '', emailVerified: true, pwd: null, bio: '', photo: null,
       followers: [], following: [], connections: [], blocked: [], profileViews: 0, searchHistory: [],
-      settings: defaultSettings(), twoFA: false, zonePin: null, keys: null, sessions: [], verified: {},
+      settings: defaultSettings(), mfa: null, zonePin: null, keys: null, sessions: [], verified: {},
       termsAcceptedAt: now(), createdAt: now(), fictional: false,
     }, fields);
   }

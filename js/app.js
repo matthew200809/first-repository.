@@ -35,7 +35,7 @@ const App = (() => {
     return `${browser}${os ? ' · ' + os : ''}`;
   }
 
-  async function completeLogin(user, password, privKeyOverride) {
+  async function completeLogin(user, password, privKeyOverride, nextHash) {
     if (privKeyOverride) state.privKey = privKeyOverride;
     else {
       try { state.privKey = (await Sec.unwrapPrivate(user.keys.wrapped, password)).key; }
@@ -49,7 +49,8 @@ const App = (() => {
     state.meId = user.id; state.sid = sid; state.pending = null; state.zoneUnlocked = false; state.reauthUntil = 0;
     ss.set(SESSION_KEY, JSON.stringify({ uid: user.id, sid, last: Date.now() }));
     startIdleWatch();
-    nav('#/feed');
+    nav(nextHash || '#/feed');
+    if (!nextHash && !Prefs.get().tourDone) setTimeout(() => { if (!U.hasModal()) A11y.openTour(); }, 400);
   }
 
   function restoreSession() {
@@ -163,7 +164,7 @@ const App = (() => {
     const d = db();
     d.codes = d.codes.filter((c) => !(c.email === e && c.purpose === purpose));
     d.codes.push({ email: e, purpose, hash: await Sec.sha256Hex(`${purpose}:${e}:${code}`), expires: Date.now() + 10 * 60000, attempts: 0 });
-    const subjects = { verify: 'Confirme seu e-mail no Eleva', '2fa': 'Seu código de acesso ao Eleva', reset: 'Redefinição de senha do Eleva' };
+    const subjects = { verify: 'Confirme seu e-mail no Eleva', '2fa': 'Seu código de acesso ao Eleva', '2fa-setup': 'Ative a verificação em duas etapas', reset: 'Redefinição de senha do Eleva' };
     Store.sendMail(e, subjects[purpose], 'Use o código abaixo. Ele expira em 10 minutos. Nunca compartilhe este código com ninguém — a equipe Eleva nunca pede códigos.', code);
     refreshInboxBadge();
   }
@@ -258,7 +259,7 @@ const App = (() => {
     return `<span class="avatar ${size}" aria-hidden="true">${esc(U.initials(u.name))}</span>`;
   }
   function pwField(name, label, autocomplete = 'current-password', extra = '') {
-    return `<label class="field"><span>${esc(label)}</span><div class="pw-wrap"><input type="password" name="${name}" autocomplete="${autocomplete}" required maxlength="128" ${extra}><button type="button" class="link-btn pw-toggle">mostrar</button></div></label>`;
+    return `<label class="field"><span>${esc(label)}</span><div class="pw-wrap"><input type="password" name="${name}" autocomplete="${autocomplete}" required maxlength="128" ${extra}><button type="button" class="link-btn pw-toggle" aria-label="Mostrar senha" aria-pressed="false">mostrar</button></div></label>`;
   }
   function meterHtml() {
     return '<div class="meter"><i></i></div><div class="meter-label muted"></div><ul class="meter-issues"></ul>';
@@ -280,7 +281,7 @@ const App = (() => {
     upd();
   }
   function menu(items) {
-    return `<span class="menu-wrap"><button type="button" class="icon-btn" data-act="menu" aria-label="Mais opções">•••</button><div class="menu hidden">${
+    return `<span class="menu-wrap"><button type="button" class="icon-btn" data-act="menu" aria-label="Mais opções" aria-haspopup="true" aria-expanded="false">•••</button><div class="menu hidden">${
       items.map((i) => `<button type="button" ${i.danger ? 'class="danger"' : ''} ${Object.entries(i.data).map(([k, v]) => `data-${k}="${esc(v)}"`).join(' ')}>${esc(i.label)}</button>`).join('')}</div></span>`;
   }
   /* Menu padrão de conteúdo: denunciar / bloquear (ou excluir, se for meu) */
@@ -296,20 +297,31 @@ const App = (() => {
   }
 
   const ICONS = {
-    feed: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 5h16M4 10h16M4 15h10M4 20h7"/></svg>',
-    comunidade: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z"/></svg>',
-    zona: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>',
-    perfil: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="8" r="4"/><path d="M4 21c1.5-4 4.5-6 8-6s6.5 2 8 6"/></svg>',
-    config: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>',
+    feed: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M4 5h16M4 10h16M4 15h10M4 20h7"/></svg>',
+    comunidade: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z"/></svg>',
+    zona: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>',
+    perfil: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21c1.5-4 4.5-6 8-6s6.5 2 8 6"/></svg>',
+    config: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>',
   };
+
+  const SHIELD = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M12 3l8 3v6c0 4.5-3.4 8.3-8 9-4.6-.7-8-4.5-8-9V6z"/><path d="M12 8v4m0 3h.01"/></svg>';
+  let bannerDismissed = false;
 
   function shell(active, html) {
     const u = me();
     const pendingReq = db().convos.filter((c) => c.status === 'request' && c.members.includes(u.id) && c.requestedBy !== u.id).length;
-    const link = (key, href, label, badge) => `<a href="${href}" class="${active === key ? 'active' : ''}">${ICONS[key]}<span>${label}</span>${badge ? ` <span class="badge">${badge}</span>` : ''}</a>`;
+    const link = (key, href, label, badge) => `<a href="${href}" ${active === key ? 'aria-current="page"' : ''}>${ICONS[key]}<span>${label}</span>${badge ? ` <span class="badge" aria-label="${badge} pedido${badge > 1 ? 's' : ''} pendente${badge > 1 ? 's' : ''}">${badge}</span>` : ''}</a>`;
+    // Convite para ativar a verificação em duas etapas, enquanto ela estiver desligada
+    const banner = !u.mfa && !bannerDismissed && active !== 'config' ? `
+      <div class="security-banner" role="region" aria-label="Aviso de segurança">${SHIELD}
+        <div class="grow"><b>Sua conta está protegida só pela senha.</b> Ative a verificação em duas etapas: mesmo que alguém descubra sua senha, não consegue entrar.</div>
+        <a class="btn btn-primary btn-sm" href="#/config#seguranca">Ativar agora</a>
+        <button class="btn btn-ghost btn-sm" data-act="dismiss-banner">Agora não</button>
+      </div>` : '';
     $('#app').innerHTML = `
+      <a class="skip-link" href="#main" data-skip>Pular para o conteúdo</a>
       <header class="topbar"><div class="topbar-inner">
-        <a class="brand" href="#/feed">Eleva</a>
+        <a class="brand" href="#/feed" aria-label="Eleva, ir para o Feed">Eleva</a>
         <nav class="nav" aria-label="Principal">
           ${link('feed', '#/feed', 'Feed')}
           ${link('comunidade', '#/comunidade', 'Comunidade')}
@@ -317,11 +329,14 @@ const App = (() => {
           ${link('perfil', `#/perfil/${u.id}`, 'Perfil')}
           ${link('config', '#/config', 'Ajustes')}
         </nav>
+        <div class="top-tools">${A11y.toolsHtml()}</div>
       </div></header>
-      <main class="main" id="main">${html}</main>
-      <p class="footer-note">Protótipo Eleva · os dados ficam somente neste navegador · <a href="#/termos">Termos</a> · <a href="#/privacidade">Privacidade</a></p>`;
+      <main class="main" id="main" tabindex="-1">${banner}${html}</main>
+      <footer class="footer-note">Protótipo Eleva · os dados ficam somente neste navegador · <a href="#/termos">Termos</a> · <a href="#/privacidade">Privacidade</a> · <button class="link-btn" data-tool="help">Ajuda e atalhos</button></footer>`;
+    document.body.classList.add('in-app');
     window.scrollTo(0, 0);
   }
+  const icon = (k) => ICONS[k] || '';
 
   /* ================= Roteamento ================= */
   const ROUTES = [
@@ -356,6 +371,9 @@ const App = (() => {
   }
 
   let renderSeq = 0;
+  let lastPath = null;
+  const TITLES = { login: 'Entrar', signup: 'Criar conta', verify: 'Verificação', forgot: 'Recuperar acesso', feed: 'Feed', write: 'Escrever artigo',
+    article: 'Artigo', community: 'Comunidade', question: 'Pergunta', room: 'Sala', zone: 'Zona Segura', convo: 'Conversa', profile: 'Perfil', settings: 'Ajustes', terms: 'Termos de Uso', privacy: 'Privacidade' };
   async function render() {
     const seq = ++renderSeq;
     Store.purgeExpired();
@@ -371,7 +389,11 @@ const App = (() => {
     $$('.menu').forEach((m) => m.classList.add('hidden'));
     try { await Views[route.view]({ params, query, seq }); }
     catch (e) { console.error(e); if (seq === renderSeq) U.toast('Algo deu errado ao abrir esta tela.', 'error'); }
-    if (anchor && seq === renderSeq) { const el = document.getElementById(anchor); if (el) el.scrollIntoView(); }
+    if (seq !== renderSeq) return;
+    if (!state.meId) document.body.classList.remove('in-app');
+    A11y.afterRender(TITLES[route.view], path !== lastPath);
+    lastPath = path;
+    if (anchor) { const el = document.getElementById(anchor); if (el) { el.scrollIntoView(); if (el.tabIndex < 0) el.setAttribute('tabindex', '-1'); el.focus({ preventScroll: true }); } }
     refreshInboxBadge();
   }
   const isCurrent = (seq) => seq === renderSeq;
@@ -402,6 +424,20 @@ const App = (() => {
   /* ================= Eventos globais ================= */
   function bindGlobal() {
     $('#inbox-btn').addEventListener('click', openInbox);
+    // "Pular para o conteúdo" não pode mexer no endereço (o roteador usa o #)
+    document.addEventListener('click', (e) => {
+      const skip = e.target.closest('[data-skip]');
+      if (!skip) return;
+      e.preventDefault();
+      const main = $('#main');
+      if (main) { main.focus(); main.scrollIntoView(); }
+    });
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        const open = $$('.menu').find((m) => !m.classList.contains('hidden'));
+        if (open) { open.classList.add('hidden'); const b = open.previousElementSibling; if (b) { b.setAttribute('aria-expanded', 'false'); b.focus(); } }
+      }
+    });
     document.addEventListener('click', (e) => {
       const t = e.target.closest('[data-act]');
       if (!e.target.closest('.menu-wrap')) $$('.menu').forEach((m) => m.classList.add('hidden'));
@@ -411,7 +447,14 @@ const App = (() => {
         const menuEl = t.nextElementSibling;
         const wasHidden = menuEl.classList.contains('hidden');
         $$('.menu').forEach((m) => m.classList.add('hidden'));
+        $$('[data-act="menu"]').forEach((b) => b.setAttribute('aria-expanded', 'false'));
         menuEl.classList.toggle('hidden', !wasHidden);
+        t.setAttribute('aria-expanded', String(wasHidden));
+        if (wasHidden) { const first = menuEl.querySelector('button'); if (first) first.focus(); }
+      } else if (act === 'dismiss-banner') {
+        bannerDismissed = true;
+        const b = t.closest('.security-banner'); if (b) b.remove();
+        U.toast('Você pode ativar quando quiser em Ajustes › Conta e segurança.');
       } else if (act === 'report') { report(t.dataset.type, t.dataset.id, t.dataset.user || null); }
       else if (act === 'block') { blockUser(t.dataset.user); }
     });
@@ -432,6 +475,8 @@ const App = (() => {
       await Seed.run(Store.get());
       Store.save();
     }
+    // Contas antigas com "duas etapas" por e-mail passam para o novo formato
+    Store.get().users.forEach((u) => { if (u.twoFA && !u.mfa) u.mfa = { method: 'email', backup: [], enabledAt: Date.now() }; delete u.twoFA; });
     bindGlobal();
     restoreSession();
     render();
@@ -439,5 +484,5 @@ const App = (() => {
 
   return { state, db, me, completeLogin, logout, requireReauth, issueCode, checkCode, isHidden, isContentHidden,
     report, blockUser, guardPublic, guardRate, avatar, pwField, meterHtml, bindMeter, menu, contentMenu, shell,
-    nav, render, isCurrent, boot, deviceLabel, refreshInboxBadge, sessionKey: SESSION_KEY };
+    nav, render, isCurrent, boot, icon, deviceLabel, refreshInboxBadge, sessionKey: SESSION_KEY };
 })();

@@ -57,35 +57,63 @@ const U = (() => {
     const root = $('#toast-root');
     const el = document.createElement('div');
     el.className = `toast ${type}`;
+    // Erros interrompem o leitor de tela; os demais avisos esperam a vez
+    el.setAttribute('role', type === 'error' ? 'alert' : 'status');
     el.textContent = msg;
     root.appendChild(el);
-    setTimeout(() => el.remove(), type === 'error' ? 5000 : 3200);
+    setTimeout(() => el.remove(), type === 'error' ? 6000 : 3500);
   }
 
-  /* Modal simples. Retorna { el, close }. onClose é chamado ao fechar. */
+  /* Anuncia uma frase para leitores de tela sem mudar o que está na tela */
+  function announce(msg) {
+    const el = $('#sr-announcer');
+    if (!el) return;
+    el.textContent = '';
+    setTimeout(() => { el.textContent = msg; }, 60);
+  }
+
+  /* Modal acessível: rótulo pelo título, foco preso dentro e devolvido ao fechar. Retorna { el, close }. */
   let modalStack = [];
+  const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]):not([type=hidden]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
   function modal(html, { wide = false, onClose } = {}) {
+    const opener = document.activeElement;
     const back = document.createElement('div');
     back.className = 'modal-backdrop';
-    back.innerHTML = `<div class="modal${wide ? ' wide' : ''}" role="dialog" aria-modal="true">${html}</div>`;
+    const titleId = uid('mt');
+    back.innerHTML = `<div class="modal${wide ? ' wide' : ''}" role="dialog" aria-modal="true" aria-labelledby="${titleId}">${html}</div>`;
     $('#modal-root').appendChild(back);
     const el = back.firstElementChild;
+    const h = el.querySelector('h2');
+    if (h) h.id = titleId;
+    // O resto da página fica inerte enquanto o modal está aberto
+    const app = $('#app');
+    if (app) app.setAttribute('aria-hidden', 'true');
     const close = () => {
       if (!back.isConnected) return;
       back.remove();
-      modalStack = modalStack.filter((m) => m !== close);
+      modalStack = modalStack.filter((m) => m.close !== close);
+      if (!modalStack.length && app) app.removeAttribute('aria-hidden');
+      if (opener && opener.isConnected && typeof opener.focus === 'function') opener.focus();
       if (onClose) onClose();
     };
-    modalStack.push(close);
+    modalStack.push({ close, el });
     back.addEventListener('mousedown', (e) => { if (e.target === back) close(); });
     $$('[data-close]', el).forEach((b) => b.addEventListener('click', close));
-    const first = el.querySelector('input, textarea, select, button:not([data-close])');
+    el.addEventListener('keydown', (e) => {
+      if (e.key !== 'Tab') return;
+      const items = $$(FOCUSABLE, el).filter((x) => x.offsetParent !== null || x === document.activeElement);
+      if (!items.length) return;
+      const first = items[0], last = items[items.length - 1];
+      if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+      else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+    });
+    const first = el.querySelector('input:not([type=hidden]), textarea, select, button:not([data-close])') || el.querySelector(FOCUSABLE);
     if (first) setTimeout(() => first.focus(), 30);
     return { el, close };
   }
-  const closeAllModals = () => [...modalStack].forEach((c) => c());
+  const closeAllModals = () => [...modalStack].forEach((m) => m.close());
   document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && modalStack.length) modalStack[modalStack.length - 1]();
+    if (e.key === 'Escape' && modalStack.length) modalStack[modalStack.length - 1].close();
   });
 
   function confirmDialog(title, text, { okLabel = 'Confirmar', danger = false } = {}) {
@@ -118,9 +146,10 @@ const U = (() => {
       const show = input.type === 'password';
       input.type = show ? 'text' : 'password';
       b.textContent = show ? 'ocultar' : 'mostrar';
+      b.setAttribute('aria-pressed', String(show));
     }));
   }
 
   return { esc, $, $$, uid, randomHex, toB64, fromB64, timeAgo, fullDate, initials, paragraphs, normalize, readingTime,
-    toast, modal, closeAllModals, confirmDialog, copy, debounce, bindPasswordToggles };
+    toast, announce, modal, closeAllModals, hasModal: () => modalStack.length > 0, confirmDialog, copy, debounce, bindPasswordToggles };
 })();

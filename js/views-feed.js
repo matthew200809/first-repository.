@@ -18,9 +18,9 @@
         <div class="sub">${esc(a.subtitle)}</div>
         <div class="byline">${App.avatar(author, 'sm')}<a href="#/perfil/${esc(author.id)}">${esc(author.name)}</a> · ${U.timeAgo(a.createdAt)} · ${U.readingTime(a.body)} min de leitura</div>
         <div class="actions">
-          <button class="btn btn-ghost ${liked ? 'liked' : ''}" data-like="${esc(a.id)}" aria-pressed="${liked}">${liked ? '♥' : '♡'} ${a.likes.length}</button>
-          <a class="btn btn-ghost" href="#/artigo/${esc(a.id)}#comentarios">💬 ${a.comments.filter((c) => !App.isHidden(c.userId)).length}</a>
-          <button class="btn btn-ghost" data-share-article="${esc(a.id)}">↗ Compartilhar</button>
+          <button class="btn btn-ghost ${liked ? 'liked' : ''}" data-like="${esc(a.id)}" aria-pressed="${liked}" aria-label="${liked ? 'Descurtir' : 'Curtir e salvar para ler depois'}: ${esc(a.title)} (${a.likes.length} curtidas)"><span aria-hidden="true">${liked ? '♥' : '♡'}</span> ${a.likes.length}</button>
+          <a class="btn btn-ghost" href="#/artigo/${esc(a.id)}#comentarios" aria-label="Comentários de ${esc(a.title)}: ${a.comments.filter((c) => !App.isHidden(c.userId)).length}"><span aria-hidden="true">💬</span> ${a.comments.filter((c) => !App.isHidden(c.userId)).length}</a>
+          <button class="btn btn-ghost" data-share-article="${esc(a.id)}" aria-label="Compartilhar ${esc(a.title)}"><span aria-hidden="true">↗</span> Compartilhar</button>
         </div>
       </article>`;
   }
@@ -77,7 +77,7 @@
       });
     }
     list.sort((a, b) => b.createdAt - a.createdAt);
-    const chip = (key, label) => `<a class="chip ${f === key ? 'active' : ''}" href="#/feed?f=${key}${q ? '&q=' + encodeURIComponent(q) : ''}">${label}</a>`;
+    const chip = (key, label) => `<a class="chip ${f === key ? 'active' : ''}" ${f === key ? 'aria-current="true"' : ''} href="#/feed?f=${key}${q ? '&q=' + encodeURIComponent(q) : ''}">${label}</a>`;
 
     App.shell('feed', `
       <div class="narrow">
@@ -86,7 +86,7 @@
           <button class="btn btn-primary">Buscar</button>
         </form>
         <div class="row between">
-          <div class="chips">
+          <div class="chips" role="navigation" aria-label="Filtrar artigos">
             ${chip('todos', 'Todos')}${chip('seguindo', 'Seguindo')}${chip('ciencia', 'Divulgação científica')}${chip('caso', 'Estudos de caso')}${chip('autoral', 'Textos autorais')}${chip('curtidos', '♥ Curtidos · ler depois')}
           </div>
         </div>
@@ -94,6 +94,7 @@
           <p class="muted small">${q ? `${list.length} resultado(s) para “${esc(q)}”` : f === 'curtidos' ? 'Artigos que você curtiu ficam salvos aqui para ler depois.' : ''}</p>
           <a class="btn btn-outline btn-sm" href="#/escrever">✎ Escrever artigo</a>
         </div>
+        <h1 class="sr-only">Feed de artigos</h1>
         <div id="list">${list.map(articleCard).join('') || `<div class="empty">${f === 'curtidos' ? 'Você ainda não curtiu nenhum artigo.' : 'Nenhum artigo encontrado.'}</div>`}</div>
       </div>`);
 
@@ -107,6 +108,7 @@
       App.nav(`#/feed?f=${f}${term ? '&q=' + encodeURIComponent(term) : ''}`);
     });
     bindArticleActions($('#list'), () => App.render());
+    if (query.get('focus') === 'busca') $('#search-form input').focus();
   };
 
   /* ---------------- Leitura do artigo ---------------- */

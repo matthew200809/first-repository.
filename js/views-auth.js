@@ -9,16 +9,25 @@
 
   function authLayout(inner) {
     $('#app').innerHTML = `
+      <a class="skip-link" href="#main" data-skip>Pular para o formulário</a>
       <div class="auth">
-        <section class="auth-hero">
+        <section class="auth-hero" aria-label="Sobre o Eleva">
           <div class="logo">Eleva</div>
-          <div class="tagline">Conexão, conhecimento e apoio para mulheres na liderança.</div>
+          <p class="tagline">Conexão, conhecimento e apoio para mulheres na liderança.</p>
           <div class="about">
             <h2>Quem somos</h2>
             <p>${esc(ABOUT)}</p>
           </div>
+          <ul class="pillars">
+            <li><span class="dot">${App.icon('feed')}</span><span><b>Fácil de navegar.</b> Cinco áreas sempre no mesmo lugar, tour guiado e atalhos de teclado.</span></li>
+            <li><span class="dot">${A11y.ICON.a11y}</span><span><b>Para todas.</b> Modo escuro, texto maior, alto contraste, fonte de leitura fácil e leitor de tela.</span></li>
+            <li><span class="dot">${App.icon('zona')}</span><span><b>Segura.</b> Verificação em duas etapas e mensagens criptografadas de ponta a ponta.</span></li>
+          </ul>
         </section>
-        <section class="auth-main"><div class="auth-card">${inner}</div></section>
+        <main class="auth-main" id="main" tabindex="-1">
+          <div class="auth-tools">${A11y.toolsHtml()}</div>
+          <div class="auth-card">${inner}</div>
+        </main>
       </div>`;
     U.bindPasswordToggles($('#app'));
   }
@@ -78,11 +87,7 @@
         await App.issueCode(email, 'verify');
         return App.nav('#/verificar');
       }
-      if (user.twoFA) {
-        App.state.pending = { purpose: '2fa', userId: user.id, email, password };
-        await App.issueCode(email, '2fa');
-        return App.nav('#/verificar');
-      }
+      if (user.mfa) return startSecondFactor(user, email, password);
       App.completeLogin(user, password);
     });
     $('#demo-btn').addEventListener('click', enterDemo);
@@ -152,46 +157,163 @@
 
   /* ---------------- Código por e-mail (verificação de conta ou duas etapas) ---------------- */
   let lastResend = 0;
-  Views.verify = () => {
+  const MAX_2FA_FAILS = 5;
+
+  async function startSecondFactor(user, email, password) {
+    App.state.pending = { purpose: '2fa', method: user.mfa.method, userId: user.id, email, password, fails: 0 };
+    if (user.mfa.method === 'email') await App.issueCode(email, '2fa');
+    App.nav('#/verificar');
+  }
+
+  /* Autenticador simulado: só existe no protótipo, para testar sem instalar um app no celular */
+  function totpSimHtml() {
+    return `<details class="totp-sim"><summary>Protótipo: não tem um app autenticador à mão?</summary>
+      <p class="tiny muted">Este é um autenticador simulado, só para testes. No app real ele não existe: o código vem do seu celular.</p>
+      <div class="row between"><span class="code" data-sim-code>······</span><span class="tiny muted" data-sim-left></span></div>
+      <div class="countdown" aria-hidden="true"><i data-sim-bar></i></div></details>`;
+  }
+  function bindTotpSim(root, secret, seqCheck) {
+    const codeEl = $('[data-sim-code]', root), left = $('[data-sim-left]', root), bar = $('[data-sim-bar]', root);
+    if (!codeEl) return;
+    const tick = async () => {
+      if (!codeEl.isConnected || (seqCheck && !seqCheck())) { clearInterval(iv); return; }
+      const sec = Sec.TOTP_STEP - (Math.floor(Date.now() / 1000) % Sec.TOTP_STEP);
+      codeEl.textContent = await Sec.totpAt(secret, Sec.currentStep());
+      left.textContent = `troca em ${sec}s`;
+      bar.style.width = `${(sec / Sec.TOTP_STEP) * 100}%`;
+    };
+    const iv = setInterval(tick, 1000);
+    tick();
+  }
+  Views.totpSimHtml = totpSimHtml;
+  Views.bindTotpSim = bindTotpSim;
+
+  Views.verify = ({ seq }) => {
     const p = App.state.pending;
     if (!p) return App.nav('#/entrar', true);
+    if (p.purpose === 'protect') return protectScreen(p);
     const is2fa = p.purpose === '2fa';
+    const user = p.userId ? Store.user(p.userId) : null;
+    const mode = p.useBackup ? 'backup' : is2fa ? p.method : 'verify';
+    const headings = {
+      verify: ['Confirme seu e-mail', `Enviamos um código de 6 dígitos para <b>${esc(p.email)}</b>. Ele expira em 10 minutos.`],
+      email: ['Verificação em duas etapas', `Para sua segurança, enviamos um código de 6 dígitos para <b>${esc(p.email)}</b>.`],
+      totp: ['Verificação em duas etapas', 'Abra seu app autenticador (Google Authenticator, Microsoft Authenticator, Authy…) e digite o código de 6 dígitos do <b>Eleva</b>.'],
+      backup: ['Use um código de backup', 'Digite um dos códigos de backup que você guardou ao ativar a verificação. Cada código só funciona uma vez.'],
+    };
+    const [title, lead] = headings[mode];
     authLayout(`
-      <h1>${is2fa ? 'Verificação em duas etapas' : 'Confirme seu e-mail'}</h1>
-      <p class="muted">Enviamos um código de 6 dígitos para <b>${esc(p.email)}</b>. Ele expira em 10 minutos.</p>
-      <div class="alert alert-info small">Protótipo: abra o botão <b>“E-mail simulado”</b> no canto da tela para ver o código.</div>
+      ${is2fa ? '<div class="steps" aria-hidden="true"><span class="on"></span><span class="on"></span></div><p class="tiny muted">Etapa 2 de 2 · senha confirmada ✓</p>' : ''}
+      <h1>${title}</h1>
+      <p class="muted">${lead}</p>
+      ${mode === 'verify' || mode === 'email' ? '<div class="alert alert-info small">Protótipo: abra o botão <b>“E-mail simulado”</b> no canto da tela para ver o código.</div>' : ''}
       <form id="code-form" novalidate>
-        <label class="field"><span>Código</span><input type="text" name="code" class="code-input" inputmode="numeric" autocomplete="one-time-code" maxlength="6" pattern="\\d{6}" required></label>
-        <div class="alert alert-error hidden" id="code-err"></div>
+        <label class="field"><span>${mode === 'backup' ? 'Código de backup' : 'Código de 6 dígitos'}</span>
+          ${mode === 'backup'
+            ? '<input type="text" name="code" id="code" autocomplete="one-time-code" maxlength="9" placeholder="xxxx-xxxx" required>'
+            : '<input type="text" name="code" id="code" class="code-input" inputmode="numeric" autocomplete="one-time-code" maxlength="6" required aria-describedby="code-help">'}
+        </label>
+        ${mode !== 'backup' ? '<p class="tiny muted" id="code-help">Somente números. O código muda a cada 30 segundos no app autenticador.</p>' : ''}
+        ${mode === 'totp' && user ? totpSimHtml() : ''}
+        <div class="alert alert-error hidden" id="code-err" role="alert"></div>
         <button class="btn btn-primary btn-block">Confirmar</button>
       </form>
-      <div class="row between small">
-        <button class="link-btn" id="resend">Reenviar código</button>
+      <div class="row between small links-row">
+        ${mode === 'verify' || mode === 'email' ? '<button class="link-btn" id="resend">Reenviar código</button>' : ''}
+        ${is2fa ? `<button class="link-btn" id="switch">${mode === 'backup' ? 'Voltar para o código normal' : 'Usar um código de backup'}</button>` : ''}
         <button class="link-btn" id="cancel">Voltar para o login</button>
-      </div>`);
+      </div>
+      ${is2fa ? '<p class="proto-note">Perdeu o acesso ao celular e aos códigos de backup? Use “Esqueci minha senha” para recuperar a conta pelo e-mail.</p>' : ''}`);
+    if (mode === 'totp' && user) bindTotpSim($('#app'), user.mfa.secret, () => App.isCurrent(seq));
     const form = $('#code-form');
     const err = $('#code-err');
-    form.code.addEventListener('input', () => { form.code.value = form.code.value.replace(/\D/g, '').slice(0, 6); });
+    if (mode !== 'backup') form.code.addEventListener('input', () => { form.code.value = form.code.value.replace(/\D/g, '').slice(0, 6); });
+    form.code.focus();
+
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
       showErr(err, '');
-      const code = form.code.value;
-      if (!/^\d{6}$/.test(code)) return showErr(err, 'Digite os 6 números do código.');
-      const res = await App.checkCode(p.email, is2fa ? '2fa' : 'verify', code);
-      if (!res.ok || !p.userId) return showErr(err, res.ok ? 'Código incorreto.' : res.error);
-      const user = Store.user(p.userId);
-      if (!is2fa) { user.emailVerified = true; Store.save(); U.toast('E-mail confirmado! Bem-vinda ao Eleva.', 'ok'); }
+      const code = form.code.value.trim();
+      if (mode !== 'backup' && !/^\d{6}$/.test(code)) return showErr(err, 'Digite os 6 números do código.');
+      if (!is2fa) {
+        const res = await App.checkCode(p.email, 'verify', code);
+        if (!res.ok || !user) return showErr(err, res.ok ? 'Código incorreto.' : res.error);
+        user.emailVerified = true; Store.save();
+        U.toast('E-mail confirmado! Bem-vinda ao Eleva.', 'ok');
+        if (user.mfa) return startSecondFactor(user, p.email, p.password);
+        // Conta nova: convidamos a ativar a verificação em duas etapas antes de entrar
+        App.state.pending = { ...p, purpose: 'protect' };
+        return App.render();
+      }
+      let ok = false;
+      if (mode === 'totp') {
+        const step = await Sec.verifyTotp(user.mfa.secret, code, user.mfa.lastStep ?? -1);
+        if (step !== null) { ok = true; user.mfa.lastStep = step; }
+      } else if (mode === 'email') {
+        ok = (await App.checkCode(p.email, '2fa', code)).ok;
+      } else {
+        const h = await Sec.sha256Hex(`backup:${user.id}:${Sec.normBackup(code)}`);
+        const i = (user.mfa.backup || []).indexOf(h);
+        if (i >= 0) {
+          ok = true;
+          user.mfa.backup.splice(i, 1);
+          Store.sendMail(user.email, 'Código de backup usado', `Um código de backup foi usado para entrar na sua conta. Restam ${user.mfa.backup.length}. Se não foi você, troque sua senha.`);
+        }
+      }
+      if (!ok) {
+        p.fails++;
+        if (p.fails >= MAX_2FA_FAILS) {
+          App.db().attempts[await Sec.sha256Hex(p.email)] = { count: 0, until: Date.now() + 60000 };
+          Store.save();
+          App.state.pending = null;
+          U.toast('Muitas tentativas na verificação. Por segurança, o login foi bloqueado por 1 minuto.', 'error');
+          return App.nav('#/entrar');
+        }
+        const reused = mode === 'totp' && user.mfa.lastStep >= 0 && await Sec.totpAt(user.mfa.secret, user.mfa.lastStep) === code;
+        form.code.value = '';
+        form.code.focus();
+        return showErr(err, reused
+          ? 'Esse código já foi usado. Por segurança, cada código vale uma vez: espere o app mostrar o próximo (até 30 segundos).'
+          : `Código incorreto. ${MAX_2FA_FAILS - p.fails} tentativa(s) restante(s).`);
+      }
+      Store.save();
+      if (mode === 'backup') U.toast(`Código de backup aceito. Restam ${user.mfa.backup.length}.`, user.mfa.backup.length <= 2 ? 'error' : 'ok');
       App.completeLogin(user, p.password);
     });
-    $('#resend').addEventListener('click', async () => {
+    const resend = $('#resend');
+    if (resend) resend.addEventListener('click', async () => {
       const wait = 30000 - (Date.now() - lastResend);
       if (wait > 0) return U.toast(`Aguarde ${Math.ceil(wait / 1000)}s para reenviar.`);
       lastResend = Date.now();
       if (p.userId) await App.issueCode(p.email, is2fa ? '2fa' : 'verify');
       U.toast('Se o e-mail estiver correto, um novo código foi enviado.');
     });
+    const sw = $('#switch');
+    if (sw) sw.addEventListener('click', () => { p.useBackup = !p.useBackup; App.render(); });
     $('#cancel').addEventListener('click', () => { App.state.pending = null; App.nav('#/entrar'); });
   };
+
+  /* Depois de confirmar o e-mail: por que ativar a verificação em duas etapas */
+  function protectScreen(p) {
+    const user = Store.user(p.userId);
+    authLayout(`
+      <h1>Proteja sua conta</h1>
+      <p class="muted">Falta um passo para deixar sua conta muito mais segura.</p>
+      <div class="card">
+        <p class="small"><b>A verificação em duas etapas pede, além da senha, um código que só você tem.</b> Mesmo que alguém descubra ou vaze a sua senha, não consegue entrar.</p>
+        <ul class="why">
+          <li><span>Protege suas conversas da Zona Segura, que podem incluir mentorias e desabafos.</span></li>
+          <li><span>Impede que alguém publique em seu nome na comunidade.</span></li>
+          <li><span>Leva menos de 2 minutos para configurar.</span></li>
+        </ul>
+      </div>
+      <div class="stack">
+        <button class="btn btn-primary btn-block" id="setup">Ativar verificação em duas etapas</button>
+        <button class="btn btn-ghost btn-block" id="later">Fazer isso depois</button>
+      </div>`);
+    $('#setup').addEventListener('click', () => App.completeLogin(user, p.password, null, '#/config?ativar=2fa'));
+    $('#later').addEventListener('click', () => App.completeLogin(user, p.password));
+  }
 
   /* ---------------- Esqueci minha senha ---------------- */
   let resetEmail = null;
