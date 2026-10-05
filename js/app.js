@@ -19,6 +19,12 @@ const App = (() => {
   };
 
   const db = () => Store.get();
+  /* sessionStorage pode estar bloqueado (janela privada, iframe): o app segue funcionando sem ele */
+  const ss = {
+    get: (k) => { try { return sessionStorage.getItem(k); } catch { return null; } },
+    set: (k, v) => { try { sessionStorage.setItem(k, v); } catch { /* ignora */ } },
+    del: (k) => { try { sessionStorage.removeItem(k); } catch { /* ignora */ } },
+  };
   const me = () => (state.meId ? Store.user(state.meId) : null);
 
   /* ================= Sessão ================= */
@@ -41,24 +47,24 @@ const App = (() => {
     if (!user.demo) Store.sendMail(user.email, 'Novo acesso à sua conta Eleva', `Detectamos um novo acesso em ${deviceLabel()} em ${U.fullDate(Date.now())}. Se não foi você, altere sua senha e encerre as outras sessões em Configurações.`);
     Store.save();
     state.meId = user.id; state.sid = sid; state.pending = null; state.zoneUnlocked = false; state.reauthUntil = 0;
-    sessionStorage.setItem(SESSION_KEY, JSON.stringify({ uid: user.id, sid, last: Date.now() }));
+    ss.set(SESSION_KEY, JSON.stringify({ uid: user.id, sid, last: Date.now() }));
     startIdleWatch();
     nav('#/feed');
   }
 
   function restoreSession() {
     try {
-      const s = JSON.parse(sessionStorage.getItem(SESSION_KEY));
+      const s = JSON.parse(ss.get(SESSION_KEY));
       if (!s) return;
       const u = Store.user(s.uid);
       if (!u || !u.sessions.some((x) => x.id === s.sid) || Date.now() - s.last > IDLE_MS) {
-        sessionStorage.removeItem(SESSION_KEY);
+        ss.del(SESSION_KEY);
         if (u && Date.now() - s.last > IDLE_MS) U.toast('Você foi desconectada por inatividade.');
         return;
       }
       state.meId = u.id; state.sid = s.sid;
       startIdleWatch();
-    } catch { sessionStorage.removeItem(SESSION_KEY); }
+    } catch { ss.del(SESSION_KEY); }
   }
 
   function logout(message) {
@@ -69,7 +75,7 @@ const App = (() => {
     }
     state.meId = null; state.sid = null; state.privKey = null; state.zoneUnlocked = false; state.reauthUntil = 0; state.pending = null;
     state.viewed.clear();
-    sessionStorage.removeItem(SESSION_KEY);
+    ss.del(SESSION_KEY);
     stopIdleWatch();
     U.closeAllModals();
     if (message) U.toast(message);
@@ -90,8 +96,8 @@ const App = (() => {
     if (now - lastTouch < 5000) return;
     lastTouch = now;
     try {
-      const s = JSON.parse(sessionStorage.getItem(SESSION_KEY));
-      if (s) { s.last = now; sessionStorage.setItem(SESSION_KEY, JSON.stringify(s)); }
+      const s = JSON.parse(ss.get(SESSION_KEY));
+      if (s) { s.last = now; ss.set(SESSION_KEY, JSON.stringify(s)); }
     } catch { /* ignora */ }
     armIdle();
   }
